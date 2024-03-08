@@ -5,6 +5,15 @@ date: "2024-02-21"
 editor_options: 
   chunk_output_type: console
 ---
+#Before you start
+
+##Set my seed
+```{r set-seed}
+#Setting our seed: makes the code reproducible; will pick the same random samples (the ones we used to generate the quality plots)
+
+#Any number can be chosen 
+set.seed(02262000)
+```
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, 
@@ -84,9 +93,29 @@ head(filtered_reverse_reads)
 
 
 #Filter and Trim
+
+Parameters of filter and trim depend on the DATA SET
+Kozich et al. -> describe library prep and a protocol where they used 515F and 806R primers for full overlap
+2 step illumina: you need to remove the primers
+Does my dataset include the primers? Read the methods paper. 
+Pair ended reads are better, so there are forward and reverse reads
 ```{r filter-and-trim}
 ?filterAndTrim
+#maxN= the number of n bases. Putting zeros removes Ns from the data. Every base matters.
+#maxEE = expected errors. quality filtering threshold applied to expected errors. here, if there are less than 2 errors, its okay. However, more than two would result in the data being discarded. First value is for the forward read, the second is for the reverse read.
+#trimLeft = remove first three basepairs 
 
+#Assign a vector to filtered reads
+#trim out poor bases, first 3 bp on F reads
+#write out filtered fastq files
+filtered_reads <- filterAndTrim(fwd = forward_reads, filt = filtered_forward_reads, rev = reverse_reads, filt.rev = filtered_reverse_reads, maxN = 0, maxEE = c(2,2), trimLeft= 3, truncQ = 2, rm.phix = TRUE, compress = TRUE, multithread = TRUE)
+
+
+```
+
+#Session information
+```{r session-info}
+devtools::session_info()
 
 
 ```
