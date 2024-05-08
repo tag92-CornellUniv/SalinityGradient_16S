@@ -1,0 +1,504 @@
+---
+title: "analysis"
+author: "T. Griffin"
+date: "2024-04-17"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.path = "./figures/05_community-analysis")
+```
+
+# goals 
+1. calculate community dissimilarity (all vary between 0 and 1, if one = completely dissimilar)
+  a. Sorensen - presence/absence
+  b. Bray-curtis- presence/absence + abundance
+  c. weighted unifrac - presence/absence + phylogenetics
+2. Evaluate sequencing depth
+3. load in phyloseq data with rooted tree
+4. Normalize read counts
+5. Visualize the community data with two constrainted ordination
+  a. PCoA - how much variance is explained by multiple/each axes, linear method, matrix algebra to calculate the eigen value
+  b. NMDS- total variance, need to report stress value (<0.15)
+  6. Run statistics with PERMANOVA and betadispR
+  
+# set up
+
+## load libraries
+```{r}
+#install.packages("vegan")
+library(vegan)
+pacman::p_load(tidyverse, ggtree, phyloseq, phytools, install = FALSE)
+
+# Setting colors for stations 
+station_colors <- c(
+  "Shipping Channel" = "dodgerblue4",
+  "Aransas Bay" = "dodgerblue2",
+  "Copano West" = "#D9CC3C",
+  "Copano East" = "#A0E0BA",
+  "Mesquite Bay" = "#00ADA7")
+```
+
+# load data
+```{r}
+#load in rooted phylogenetic tree!
+
+load("/local/workdir/tag92/git_repos/SalinityGradient_16S/data/03_phylogenetic_tree/phytree_preprocessed_physeq.RData")
+midroot_physeq_rm456
+unrooted_tree_removed456
+
+```
+
+## Explore read counts
+```{r}
+#thsi will calucle the total number of reads per sample
+raw_totalseqs_df <- midroot_physeq_rm456 %>%
+sample_sums() %>%
+data.frame() #%>%
+#view()
+
+colnames(raw_totalseqs_df)[1] <- "total_sequences"
+head(raw_totalseqs_df)
+
+#make histogram of raw reads
+raw_totalseqs_df %>%
+  ggplot(aes(x = total_sequences)) +
+  geom_histogram(bins = 50) +
+scale_x_continuous(limits = c(0, 10000)) +
+  labs(title = "new sequencing depth distribution") +
+  theme_classic()
+
+
+```
+
+# remove lowly sequenced samples
+```{r}
+raw_rooted_physeq <- midroot_physeq_rm456 %>%
+  #remove lowly seq sample that was outlier in alpha diversity alpha
+  subset_samples(names != "20210615-MA-ABB2F") %>%
+  prune_taxa(taxa_sums(.) > 0, .)
+
+#inspect
+raw_rooted_physeq
+
+#what is the mininum num of seq
+raw_rooted_physeq %>%
+sample_sums() %>%
+min()
+
+# Scale reads function and also matround function 
+
+### scale_reads function
+#################################################################################### 
+# Function to scale reads: http://deneflab.github.io/MicrobeMiseq/ 
+# Scales reads by 
+# 1) taking proportions
+# 2) multiplying by a given library size of n
+# 3) rounding 
+# Default for n is the minimum sample size in your library
+# Default for round is floor
+
+matround <- function(x){trunc(x+0.5)}
+
+scale_reads <- function(physeq, n = min(sample_sums(physeq)), round = "round") {
+  
+  # transform counts to n
+  physeq.scale <- transform_sample_counts(physeq, function(x) {(n * x/sum(x))})
+  
+  # Pick the rounding functions
+  if (round == "floor"){
+    otu_table(physeq.scale) <- floor(otu_table(physeq.scale))
+  } else if (round == "round"){
+    otu_table(physeq.scale) <- round(otu_table(physeq.scale))
+  } else if (round == "matround"){
+    otu_table(physeq.scale) <- matround(otu_table(physeq.scale))
+  }
+  
+  # Prune taxa and return new phyloseq object
+  physeq.scale <- prune_taxa(taxa_sums(physeq.scale) > 0, physeq.scale)
+  return(physeq.scale)
+}
+```
+
+# scale the reads and check the distribution of the seq depth
+```{r}
+min(sample_sums(raw_rooted_physeq))
+
+#Scale reads by the above function
+scale_rooted_physeq <- 
+  raw_rooted_physeq %>%
+  scale_reads(round = "matround")
+
+#calculate the read depth
+scaled_totalseqs_df <-
+  scale_rooted_physeq %>%
+  sample_sums() %>%
+  data.frame()
+colnames(scaled_totalseqs_df)[1] <- "totalseqs"
+
+#inspect
+head(scaled_totalseqs_df)
+```
+
+# check the range of data
+```{r}
+#check the range of the data
+min_seqs <- min(scaled_totalseqs_df$totalseqs); min_seqs
+max_seqs <- max(scaled_totalseqs_df$totalseqs); max_seqs
+
+colnames(raw_totalseqs_df)[1] <- "total_sequences"
+
+#plot histograms
+scaled_totalseqs_df %>%
+  ggplot(aes(x = totalseqs)) +
+  geom_histogram(bins = 50) +
+scale_x_continuous(limits = c(0, 10000)) +
+  labs(title = "new sequencing depth distribution at 2194") +
+  theme_classic()
+```
+
+##normalize read coutns
+
+##Caluclate and visualize community dissimialry
+
+## sorensson
+```{r}
+ordinate(
+  physeq = scale_rooted_physeq,
+  method = "PCoA",
+  distance = "bray", binary = TRUE)
+
+
+#plot the ordination
+soren_station_pcoa <- plot_ordination(
+  physeq = scale_rooted_physeq,
+  ordination = scaled_soren_pcoa,
+  color = "station",
+  shape = "station",
+  title = "Sorensen PCoA") +
+  geom_point(size=5, alpha = 0.5, aes(color = station)) +
+  scale_shape_manual(values = c(15,16,17,18, 19, 20)) +
+  scale_color_manual(values = station_colors) + 
+  theme_bw()
+# show the plot 
+soren_station_pcoa
+#PERMANOVA of sorensen
+#make a new object that has sorenson dissimilarity matrix
+sorensen_distance <- phyloseq::distance(scale_rooted_physeq, method = "bray", binary = TRUE)
+
+str(sorensen_distance)
+
+#metadata
+metadata <- 
+  scale_rooted_physeq %>%
+  sample_data %>%
+  data.frame()
+
+#actually run the PERMANOVA
+#tests if centroid of the data are similar or different
+adonis2(sorensen_distance ~ station, data = metadata)
+```
+
+## bray-curtis-PCoA
+```{r}
+# calculate the bray curtis
+scaled_BC_pcoa <- 
+  ordinate(
+    physeq = scale_rooted_physeq,
+    method = "PCoA",
+    distance = "bray")
+
+# plot the pcoa
+bray_station_pcoa <- 
+  plot_ordination(
+    physeq = scale_rooted_physeq,
+    ordination = scaled_BC_pcoa,
+    color = "station",
+    shape = "station",
+    title = "Bray-Curtis PCoA") +
+  geom_point(size=5, alpha = 0.5, aes(color = station)) +
+  scale_shape_manual(values = c(15,16,17,18, 19, 20)) +
+  scale_color_manual(values = c(station_colors)) + 
+  theme_bw()
+bray_station_pcoa
+```
+
+## weighted unifrac pcoa
+```{r}
+scaled_wUNI_pcoa <- 
+  ordinate(
+    physeq = scale_rooted_physeq,
+    method = "PCoA",
+    distance = "wunifrac")
+
+# Plot the PCoA
+wUNI_station_pcoa <- 
+  plot_ordination(
+    physeq = scale_rooted_physeq,
+    ordination = scaled_wUNI_pcoa,
+    color = "station",
+    shape = "station",
+    title = "Weighted Unifrac PCoA") +
+  geom_point(size=5, alpha = 0.5, aes(color = station)) +
+  scale_shape_manual(values = c(15,16,17,18, 19, 20)) +
+  scale_color_manual(values = c(station_colors)) + 
+  theme_bw()
+wUNI_station_pcoa
+```
+
+```{r}
+#combine the 3 plots
+(soren_station_pcoa + theme(legend.position = "none")) + 
+  (bray_station_pcoa + theme(legend.position = "none")) + 
+    (wUNI_station_pcoa + theme(legend.position = "none"))
+```
+
+## weighted unifrac NMDS
+```{r}
+# Calculate the Weighted Unifrac distance
+scaled_wUNI_nmds <- 
+  ordinate(
+    physeq = scale_rooted_physeq,
+    method = "NMDS",
+    distance = "wunifrac")
+
+wUNI_station_nmds <- 
+  plot_ordination(
+    physeq = scale_rooted_physeq,
+    ordination = scaled_wUNI_nmds,
+    color = "station",
+    shape = "station",
+    title = "Weighted Unifrac NMDS") +
+  geom_point(size=5, alpha = 0.5, aes(color = station)) +
+  scale_shape_manual(values = c(15,16,17,18, 19, 20)) +
+  scale_color_manual(values = c(station_colors)) + 
+  theme_bw()
+wUNI_station_nmds
+
+(wUNI_station_pcoa + theme(legend.position = "none")) + 
+  (wUNI_station_nmds + theme(legend.position = "none"))
+```
+
+# Test for statistical significance
+```{r}
+# Calculate all three of the distance matrices
+scaled_sorensen_dist <- phyloseq::distance(scale_rooted_physeq, method = "bray", binary = TRUE)
+scaled_bray_dist <- phyloseq::distance(scale_rooted_physeq, method = "bray")
+scaled_wUnifrac_dist <- phyloseq::distance(scale_rooted_physeq, method = "wunifrac")
+
+# make a data frame from the sample_data
+# All distance matrices will be the same metadata because they 
+# originate from the same phyloseq object. 
+metadata <- data.frame(sample_data(scale_rooted_physeq))
+
+# Adonis test
+# In this example we are testing the hypothesis that the five stations
+# that were collected have different centroids in the ordination space 
+# for each of the dissimilarity metrics, we are using a discrete variable 
+adonis2(scaled_sorensen_dist ~ station, data = metadata)
+
+adonis2(scaled_bray_dist ~ station, data = metadata)
+
+#R2 = the percent variation explained.
+#F = the F-Statistic, which represents the importance value.
+#Pr(>F) = the pvalue
+
+# We might also care about other variables
+# Here, we will add date and fraction as variables
+# multiplicative model ORDER MATTERS! 
+adonis2(scaled_sorensen_dist ~ station * date * fraction, data = metadata)
+adonis2(scaled_bray_dist ~ station * date * fraction, data = metadata)
+
+# Note that the ORDER MATTERS!
+adonis2(scaled_wUnifrac_dist ~ station * date * fraction, data = metadata)
+
+adonis2(scaled_wUnifrac_dist ~ date * station * fraction, data = metadata)
+
+
+```
+
+
+## Phylum
+```{r phylum-colors}
+# Set the phylum colors
+phylum_colors <- c(
+  Acidobacteriota = "navy", 
+  Actinobacteriota = "darkslategray2", 
+  Armatimonadota = "deeppink1",
+  Alphaproteobacteria = "plum2", 
+  Bacteroidota = "gold", 
+  Betaproteobacteria = "plum1", 
+  Bdellovibrionota = "red1",
+  Chloroflexi="black", 
+  Crenarchaeota = "firebrick",
+  Cyanobacteria = "limegreen",
+  Deltaproteobacteria = "grey", 
+  Desulfobacterota="magenta",
+  Firmicutes = "#3E9B96",
+  Gammaproteobacteria = "greenyellow",
+  "Marinimicrobia (SAR406 clade)" = "yellow",
+  Myxococcota = "#B5D6AA",
+  Nitrospirota = "palevioletred1",
+  Proteobacteria = "royalblue",
+  Planctomycetota = "darkorange", 
+  "SAR324 clade(Marine group B)" = "olivedrab",
+  #Proteobacteria_unclassified = "greenyellow",
+  Thermoplasmatota = "green",
+  Verrucomicrobiota = "darkorchid1")
+ # Other = "grey")
+```
+
+
+## Plot phylum composition
+```{r phylum-composition}
+#calculate the phylum relative abundance
+#the read depth must be normalized in some way: scale_reads
+phylum_df <- scale_rooted_physeq %>%
+  #agglomerate at teh phylum level; take all the ASVs and summarize their counts
+  tax_glom(taxrank = "Phylum") %>%
+  #transform counts to relative abundance
+  transform_sample_counts(function (x) {x/sum(x)}) %>%
+  #melt to a long format
+  psmelt() %>%
+
+#filter out phylum that are less than one percent, get rid of low abundant taxa or phyla
+dplyr::filter(Abundance > 0.01) %>%
+  view()
+
+ mutate(date = fct_relevel(date, c("6/2/21", "6/25/21", "10/5/21")), station = fct_relevel(station, c("Copano West", "Copano East", "Mesquite Bay", "Aransas Bay", "Shipping Channel"))) +
+
+#plot phylum abundances and load the phylum colors
+phylum_df %>%
+  #have one sample per x value; otherwise, it will take the sum between multiple samples
+  dplyr::filter(depth == 0.0) %>%
+  dplyr::filter(fraction == "Whole") %>%
+  ggplot(aes(x = station, y = Abundance, fill = Phylum)) +
+  facet_grid(.~date) +
+  geom_bar(stat = 'identity', color = 'black') +
+  labs(title = "Surface Phylum Composition") +
+  #scale_fill_manual(values = phylum_colors) + 
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1))
+  
+#psmelt will alphabetize your data in the figure, so this can be corrected usign mutate
+
+ ##Make each phylum its own row
+ phylum_df %>%
+ dplyr::filter(depth == 0.0) %>%
+  dplyr::filter(fraction == "Whole") %>%
+  ggplot(aes(x = station, y = Abundance, fill = Phylum)) +
+  #this will separate the plot into phylum and date
+   facet_grid(Phylum~date, scale = "free") +
+  geom_bar(stat = 'identity', color = 'black') +
+  labs(title = "Surface Phylum Composition") +
+  #scale_fill_manual(values = phylum_colors) + 
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1))  
+ 
+ #Narrow in on a specific group
+ #actinobacteriota - y: abundance, x: station, dot plot + boxplot
+ phylum_df %>%
+   dplyr::filter(Phylum == "Actinobacteriota") %>%
+   #build the plot
+   ggplot(aes(x = station, y = Abundance, fill = station, color = station)) +
+   geom_boxplot(alpha = 0.5, outlier.shape = NA) + # outliers not plotted here in boxplot
+   geom_jitter() +
+   theme_bw() +
+   labs(title = "actinobacteriota phylum abundance") +
+ scale_color_manual(values = station_colors) +
+   scale_fill_manual(values = station_colors)
+ 
+ #wilcox test? see if two groups are different from each other
+
+ #nonparametric anova -> kruskall wallis: is there statistical differences?
+ 
+#tukey's posthoc test
+ 
+ 
+ 
+```
+
+## Family composition
+```{r}
+phylum_df <- scale_rooted_physeq %>%
+  #agglomerate at teh phylum level; take all the ASVs and summarize their counts
+  tax_glom(taxrank = "Family") %>%
+  #transform counts to relative abundance
+  transform_sample_counts(function (x) {x/sum(x)}) %>%
+  #melt to a long format
+  psmelt() %>%
+  
+  dplyr::filter(Abundance > 0.01) %>%
+  view()
+
+ mutate(date = fct_relevel(date, c("6/2/21", "6/25/21", "10/5/21")), station = fct_relevel(station, c("Copano West", "Copano East", "Mesquite Bay", "Aransas Bay", "Shipping Channel"))) 
+ 
+ #check family df
+ phylum_df %>%
+   dplyr::filter(Phylum == "Actinobacteriota") %>%
+   #build the plot
+   ggplot(aes(x = station, y = Abundance, fill = station)) +
+   facet_wrap(.~Family, scale = "free_y") +
+   geom_boxplot(alpha = 0.5, outlier.shape = NA) + # outliers not plotted here in boxplot
+   geom_jitter() +
+   theme_bw() +
+   labs(title = "actinobacteriota family abundance") +
+ scale_color_manual(values = station_colors) +
+   scale_fill_manual(values = station_colors)
+ 
+ #wilcox test? see if two groups are different from each other
+
+ #nonparametric anova -> kruskall wallis: is there statistical differences?
+ 
+#tukey's posthoc test
+```
+
+# Plot genus
+```{r plot-genus}
+# Calculate the Family relative abundance 
+# Note: The read depth MUST be normalized in some way: scale_reads
+genus_df <- 
+  scaled_rooted_physeq %>%
+  # agglomerate at the phylum level 
+  tax_glom(taxrank = "Genus") %>% 
+  # Transform counts to relative abundance 
+  transform_sample_counts(function (x) {x/sum(x)}) %>%
+  # Melt to a long format 
+  psmelt() %>%
+  # Filter out Phyla that are <1% - get rid of low abundant Phyla
+  dplyr::filter(Abundance > 0.01) %>%
+  # fix the order of date
+  mutate(date = fct_relevel(date, c("6/2/21", "6/15/21", "10/5/21")),
+         station = fct_relevel(station, c("Copano West", "Copano East",
+                                          "Mesquite Bay", "Aransas Bay",
+                                          "Shipping Channel")))
+
+
+# Actinobacteriota
+# Plot genus 
+genus_df %>%
+  dplyr::filter(Phylum == "Actinobacteriota") %>%
+  # build the plot 
+  ggplot(aes(x = station, y = Abundance, 
+             fill = station, color = station)) + 
+  facet_wrap(.~Genus, scales = "free_y", nrow = 1) + 
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) + # outliers not plotted here in boxplot 
+  geom_jitter() + 
+  theme_bw() + 
+  labs(title = "Actinobacteriota Genus Abundance") + 
+  scale_color_manual(values = station_colors) + 
+  scale_fill_manual(values = station_colors) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        legend.position = "bottom")
+```
+
+
+#session information for reproducibility
+  
+```{r}
+devtools::session_info()
+```
+

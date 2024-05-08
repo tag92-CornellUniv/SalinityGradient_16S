@@ -1,0 +1,7 @@
+Command: FastTree -nt -gtr -fastest -log FastTree.log MAFFT_aligned_ASVs.fasta
+FastTree Version 2.1.11 SSE3
+Alignment: MAFFT_aligned_ASVs.fasta
+Nucleotide distances: Jukes-Cantor Joins: balanced Support: SH-like 1000
+Search: Fastest+2nd +NNI +SPR (2 rounds range 10) +ML-NNI opt-each=1
+TopHits: 1.00*sqrtN close=default refresh=0.50
+ML Model: Generalized Time-Reversible, CAT approximation with 20 rate categories

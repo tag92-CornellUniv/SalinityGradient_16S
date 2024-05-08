@@ -1,0 +1,153 @@
+---
+title: "03b"
+author: "T. Griffin"
+date: "2024-04-10"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Set Up
+```{r setup, include= FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      fig.align = "center",
+                      fig.path = "./figures/03_phylogenetic-tree/")#send any figure output to this folder
+```
+
+# Set the seed
+```{r set-the-seed}
+#set seed
+set.seed(238428)
+```
+
+# Goals:
+1. load the fastree unrooted tree
+2. Add tree to phyloseq object
+3/ Visualize and inspect tree with ggtree
+4. Prune asvs, if needed
+5. Root our tree
+6. Combine new tree with phyloseq object
+7. Save two phyloseq object: 1. unrooted tree. 2. rooted tree
+
+# Load packages
+```{r load-packages}
+pacman::p_load(tidyverse, ggtree, phyloseq, phytools, install = FALSE)
+
+```
+
+# Load data
+```{r load-data}
+#preprocessed phyloseq object
+load("/local/workdir/tag92/git_repos/SalinityGradient_16S/data/02_PreProcessing/raw_preprocessed_physeq.RData")
+raw_preprocessed_physeq
+
+#load in the tree
+unrooted_tree <- read.tree("/local/workdir/tag92/git_repos/SalinityGradient_16S/data/03_phylogenetic_tree/ASVs_unrooted.tree")
+unrooted_tree
+str(unrooted_tree)
+
+```
+
+# Merge Phyloseq
+```{r}
+#intuition check
+stopifnot(ntaxa(raw_preprocessed_physeq) == ntaxa(unrooted_tree))
+
+#Merge the tree with the phyloseq object
+unrooted_physeq <- 
+  merge_phyloseq(raw_preprocessed_physeq, unrooted_tree)
+unrooted_physeq
+```
+
+# Plot the tree using ggTree
+```{r}
+# Make a basic tree
+kingdom_node_tree <- ggtree(unrooted_physeq) +
+  #color tips by kingdom
+  geom_tippoint(mapping = aes(color = Kingdom)) +
+  scale_color_manual(values = c("goldenrod1", "pink", "red")) +
+  #add title
+  labs(title = "unrooted tree") +
+  #add node label
+  geom_text(aes(label=node), # horizontal adjustment 
+            hjust = -0.5, vjust = -0.3, size = 2) +
+  #move legend to the bottom
+  theme(legend.position = "bottom")
+
+```
+
+# Evaluate Long branch
+This part gets a bit manual
+```{r eval-long-branch}
+#inspect clades of the tree
+#zoom in on origin tree: 2537
+
+viewClade(kingdom_node_tree + labs(title = "unrooted tree node 5208") +
+    geom_text(aes(label=ASV)),
+          node = 5208)
+
+unrooted_physeq %>%
+  subset_taxa(ASV == "ASV_456") %>%
+  tax_table() %>%
+  data.frame()
+
+```
+
+# prune out the weird ASVs
+```{r prune-ASV456}
+#this will remove the strange ASVs
+#create a new tree without it
+pop_taxa = function(physeq, badTaxa){
+  allTaxa <-  taxa_names(physeq)
+  allTaxa <- allTaxa[!(allTaxa %in% badTaxa)]
+  return(prune_taxa(allTaxa, physeq))}
+
+unrooted_tree_removed456 <- unrooted_physeq %>%
+  pop_taxa(., "ASV_456")
+
+#intuiton check:this will give the number of taxa present after removal
+ntaxa(unrooted_physeq) - ntaxa(unrooted_tree_removed456)
+
+#visually inspect
+ggtree(unrooted_tree_removed456) +
+  geom_tippoint(mapping = aes(color = Kingdom))
+```
+
+#Midroot the tree
+```{r midroot}
+#midroot the tree: is the tree rooted?
+
+new_unrooted_tree <- phy_tree(unrooted_tree_removed456)
+is.rooted(new_unrooted_tree)
+midpoint_rooted_tree <- midpoint.root(new_unrooted_tree)
+
+# Is the new tree rooted?
+is.rooted(midpoint_rooted_tree)
+
+physeq_rm456 <- 
+  raw_preprocessed_physeq %>%
+  subset_taxa(ASV != "ASV_456")
+
+# Merge tree with the new physeq_rm456
+midroot_physeq_rm456 <- 
+  merge_phyloseq(physeq_rm456, midpoint_rooted_tree)
+
+midroot_physeq_rm456
+
+ggtree(midroot_physeq_rm456) + 
+  geom_tippoint(mapping = aes(color = Kingdom))
+```
+
+# Save to new phylo object
+```{r save-physeq}
+save(list = c("unrooted_tree_removed456", "midroot_physeq_rm456"),
+     file = "/local/workdir/tag92/git_repos/SalinityGradient_16S/data/03_phylogenetic_tree/phytree_preprocessed_physeq.RData")
+
+```
+
+```{r session-info}
+devtools::session_info()
+```
+
+
+
